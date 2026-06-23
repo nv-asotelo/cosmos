@@ -1,9 +1,14 @@
 # Run Custom Palletizing Images with Cosmos3 Reasoner
 
-Use this entry point when you do not want the Doosan demo frontend, Isaac Sim, or
-the robot-control loop. It sends your own box images directly to a Cosmos3-Nano
-Reasoner OpenAI-compatible endpoint and writes an operator-visible reasoning
-trace plus a structured palletizing recommendation.
+Use this public entry point when you want to send box images directly to a
+Cosmos3-Nano Reasoner OpenAI-compatible endpoint and write an operator-visible
+reasoning trace plus a structured palletizing recommendation. It does not use
+Diffusers or any external demo stack.
+
+The original merged recipe's `inference-server` was a vLLM server configured for
+Cosmos Reason 2. It is not a drop-in Cosmos3 backend. For this recipe, start a
+standalone Cosmos3 Reasoner endpoint and use the model ID returned by
+`/v1/models`.
 
 This path validates model reasoning and output formatting only. It does not
 execute robot motion, compute collision-free trajectories, or certify that a
