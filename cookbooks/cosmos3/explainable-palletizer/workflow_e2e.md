@@ -106,6 +106,18 @@ completion-token limit before emitting a parseable action. Raise
 the app-server smoke. This is a reference-app/parser setup issue rather than a
 Cosmos3 service availability issue.
 
+If the response parsed and the UI shows one action after a multi-box reasoning
+trace, that can still be correct: the reference loop reasons over the front
+buffer window and emits one action per iteration. The full-stack smoke is
+blocked only if execution fails after the action handoff. Check `app-server`
+and `sim-server` logs for `POST ... /sim/robot/pick_place` failures such as
+`pick_and_place RESPONSE 500` with `NoneType` details, and check
+`/sim/buffer/status` for a partially popped buffer like
+`{"occupied":2,"slots":[0,1,1],"in_transit":false}`. In that case, reset and
+restart the control loop before retesting. If the same `pick_place` 500
+reproduces after a clean reset, record the robot-loop path as blocked by the
+Isaac Sim/cuRobo setup and do not treat it as a Cosmos3 reasoning failure.
+
 Because prompt shape and token count cannot fully guarantee parseable JSON from
 a free-form reasoning response, keep the default action smoke as the PR/CI gate
 unless the goal is specifically to inspect Cosmos3 visual reasoning.

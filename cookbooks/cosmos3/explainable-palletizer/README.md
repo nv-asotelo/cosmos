@@ -204,6 +204,15 @@ a plumbing-only smoke by setting `PALLETIZER_PLUMBING_ONLY=1`, but do not make
 that the cookbook default and do not count it as a Cosmos3 pass. In that mode
 the app points at `facebook/opt-125m`, which rejects the multimodal request.
 
+The operator UI can show a reasoning trace for multiple boxes while the action
+panel advances by one pick. That is expected: each control-loop iteration asks
+Cosmos3 to inspect the front buffer window and emit one bounded action. If the
+action list stalls after that, inspect the app and sim logs. A repeated
+`/sim/robot/pick_place` 500, especially with a partially popped buffer in
+`/sim/buffer/status`, is an Isaac Sim/cuRobo execution blocker rather than a
+Cosmos3 model-selection problem. Reset the control loop before rerunning so the
+app's captured box stack and the simulator buffer are in sync.
+
 The current upstream Dockerfile expects `uv.lock`; generate it once with
 `uv lock` if the source checkout does not already include it. Change `SIM_PORT`,
 `INFERENCE_PORT`, `APP_PORT`, and `FRONTEND_PORT` in `docker/.env` if another

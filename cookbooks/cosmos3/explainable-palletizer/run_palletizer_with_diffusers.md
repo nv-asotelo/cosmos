@@ -400,6 +400,36 @@ If the UI stays on "No reasoning yet" and the action list does not advance:
   `box_0000`, use a source revision that normalizes those IDs or patch the
   local Doosan checkout for the smoke run.
 
+If the reasoning panel describes several boxes but the action list shows only
+one pick, first remember that this is normal control-loop shape: each iteration
+asks the model to inspect the front buffer window and emit exactly one bounded
+action. Treat it as a simulator/setup failure only when the app logs show the
+action was handed to the sim and then failed, for example:
+
+```text
+Executing: action=PICK_AND_PLACE box_id=box_0000 ...
+POST http://sim-server:8100/sim/robot/pick_place "HTTP/1.1 500 Internal Server Error"
+pick_and_place RESPONSE 500: {"detail":"'NoneType' object is not subscriptable"}
+```
+
+In that failure mode, `/sim/buffer/status` can remain stuck with a partially
+popped buffer such as `{"occupied":2,"slots":[0,1,1],"in_transit":false}`.
+The UI may still show the old `box_0000` image because the app already captured
+the prompt images, but the physical sim slot has been popped. Reset the
+control loop before rerunning so the app stack and simulator buffer agree:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8000/api/control/reset
+curl -fsS -X POST http://127.0.0.1:8000/api/control/start
+curl -fsS http://127.0.0.1:8100/sim/buffer/status
+```
+
+If the same `pick_place` 500 reproduces after a clean reset, record the robot
+loop as blocked by the Isaac Sim/cuRobo setup rather than by Cosmos3. Cosmos3
+is validated for this path only up to parsed action generation unless the sim
+logs also contain a successful `pick_and_place SUCCESS` or equivalent pallet
+state update.
+
 If `sim-server` exits with `AttributeError: module 'warp.types' has no attribute
 'array'`, the image resolved a newer `warp-lang` than the current cuRobo/Isaac
 Sim path expects. Pin `warp-lang==1.12.0` in the sim image, rebuild, and rerun
