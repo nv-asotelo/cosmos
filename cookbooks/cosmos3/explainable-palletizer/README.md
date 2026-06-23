@@ -52,6 +52,23 @@ adapters, or external app wiring as evidence that Cosmos3 is running.
   `/v1/chat/completions`.
 - Local images in `jpg`, `jpeg`, `png`, or `webp` format.
 
+## GPU Requirements
+
+The Python client in this recipe can run on a laptop or CPU-only machine when it
+points at a remote Cosmos3 Reasoner endpoint. GPU requirements apply to the
+machine that serves the Reasoner.
+
+For the local default path, use Cosmos3-Nano Reasoner on one workstation-class
+NVIDIA GPU. The shared Cosmos3 docs launch Nano with vLLM on a single GPU, and
+NVIDIA positions Cosmos3-Nano for workstation-grade compute such as RTX PRO
+6000-class systems. Treat that as the practical minimum for this public recipe.
+Smaller 24 GB GPUs may require quantization, offload, or serving changes that
+are not covered here.
+
+Cosmos3-Super Reasoner is not the default for this recipe. If you switch to
+Super, use the shared Reasoner setup guidance for multi-GPU serving and adjust
+`COSMOS3_REASONER_MODEL` to the model ID returned by `/v1/models`.
+
 ## Start The Reasoner
 
 Use the shared [vLLM Reasoner setup](../README.md#vllm) or

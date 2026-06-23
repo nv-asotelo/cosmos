@@ -19,6 +19,11 @@ placement is robot-safe.
 Run a Cosmos3-Nano Reasoner server with vLLM or NIM, then point this client at
 the `/v1` base URL:
 
+The client itself does not need a GPU if the endpoint is remote. The serving
+host should be a workstation-class NVIDIA GPU system for the default
+Cosmos3-Nano Reasoner path. Smaller 24 GB GPUs are not the documented baseline
+for this recipe.
+
 ```bash
 export COSMOS3_REASONER_BASE_URL="${COSMOS3_REASONER_BASE_URL:-http://127.0.0.1:8200/v1}"
 export COSMOS3_REASONER_MODEL="${COSMOS3_REASONER_MODEL:-nvidia/Cosmos3-Nano}"
