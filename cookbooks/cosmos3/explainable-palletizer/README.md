@@ -40,8 +40,16 @@ adapters, or external app wiring as evidence that Cosmos3 is running.
   without a demo frontend.
 - Save `raw_response.txt`, `reasoning_trace.txt`, `plan.json`, and
   `request_summary.json` for review.
+- Optionally spawn a small local review frontend from those saved artifacts.
 - Compare the model output against damaged-carton, heavy-box, and mixed-SKU
   validation criteria in [workflow_e2e.md](workflow_e2e.md).
+
+## Run Modes
+
+| Mode | Entry point | Use when |
+| --- | --- | --- |
+| Headless shell or notebook | [run_custom_images_with_reasoner.md](run_custom_images_with_reasoner.md) | You want to pipe images or a manifest into Cosmos3 Reasoner and save artifacts. |
+| Optional review frontend | [serve_review_frontend.md](serve_review_frontend.md) | An agent or user wants a browser view over the saved images, reasoning, and action JSON. |
 
 ## Prerequisites
 
@@ -133,6 +141,18 @@ metadata. Relative paths are resolved from the manifest directory:
 export PALLETIZER_MANIFEST=/path/to/manifest.json
 ```
 
+The runner accepts three common input patterns:
+
+- **Local files:** set `PALLETIZER_IMAGE_DIR=/absolute/path/to/images` or
+  `PALLETIZER_MANIFEST=/absolute/path/to/manifest.json`.
+- **Mounted files:** mount a host dataset into the runtime, then use the
+  container-visible path in `PALLETIZER_IMAGE_DIR` or `PALLETIZER_MANIFEST`.
+- **Public datasets:** download or materialize the dataset locally first, review
+  its license, then point the recipe at the local image folder or manifest.
+
+The client sends images as base64 data URIs to the Reasoner endpoint, so it does
+not fetch remote image URLs directly during inference.
+
 ## Run The Headless Client
 
 ```bash
@@ -145,6 +165,22 @@ export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
 Then run [run_custom_images_with_reasoner.md](run_custom_images_with_reasoner.md).
 The Python block in that file uses only the standard library, so it can run as a
 shell smoke test or be copied into a notebook.
+
+## Optional Review Frontend
+
+After the headless run writes artifacts, an agent can start a small local review
+UI:
+
+```bash
+export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
+export PALLETIZER_IMAGE_DIR=/path/to/my/box-images
+export PALLETIZER_REVIEW_HOST=127.0.0.1
+export PALLETIZER_REVIEW_PORT=3000
+```
+
+Then follow [serve_review_frontend.md](serve_review_frontend.md). On a remote GPU
+host, set `PALLETIZER_REVIEW_HOST=0.0.0.0` only when the network is trusted and
+the port should be reachable from your browser.
 
 ## Output Contract
 

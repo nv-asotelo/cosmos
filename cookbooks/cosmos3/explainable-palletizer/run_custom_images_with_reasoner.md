@@ -80,6 +80,90 @@ export PALLETIZER_MANIFEST=/path/to/manifest.json
 If both `PALLETIZER_MANIFEST` and `PALLETIZER_IMAGE_DIR` are set, the manifest
 wins.
 
+### Local Files
+
+Use absolute paths when possible. This keeps shell, notebook, and agent runs
+consistent:
+
+```bash
+export PALLETIZER_IMAGE_DIR=/data/palletizer/images
+export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
+```
+
+For metadata-rich runs, prefer a manifest:
+
+```bash
+export PALLETIZER_MANIFEST=/data/palletizer/manifest.json
+export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
+```
+
+### Mounted Files
+
+If an agent runs the client from a container, mount the dataset and output
+directory explicitly, then use the container-visible paths:
+
+```bash
+docker run --rm -it \
+  --add-host=host.docker.internal:host-gateway \
+  -v "$PWD":/workspace:ro \
+  -v /data/palletizer:/data:ro \
+  -v /tmp/cosmos3-palletizer-headless:/outputs \
+  -w /workspace/cookbooks/cosmos3/explainable-palletizer \
+  python:3.12-slim bash
+
+export COSMOS3_REASONER_BASE_URL=http://host.docker.internal:8200/v1
+export COSMOS3_REASONER_MODEL=nvidia/Cosmos3-Nano
+export PALLETIZER_MANIFEST=/data/manifest.json
+export PALLETIZER_OUTPUT_DIR=/outputs
+```
+
+On Linux Docker, `host.docker.internal` may require the host-gateway mapping
+shown above. If that is not configured, use the host IP address that reaches the
+Reasoner endpoint from inside the container.
+
+### Public Datasets
+
+Materialize public datasets locally before running inference. Review the dataset
+license and filter to a small image batch before sending it to the model:
+
+```bash
+export PALLETIZER_DATA_ROOT=/tmp/palletizer-public-data
+mkdir -p "${PALLETIZER_DATA_ROOT}"
+
+# Hugging Face dataset example. Replace the dataset ID and include pattern.
+export HF_DATASET_ID=org-or-user/dataset-id
+uv run --with "huggingface-hub[cli]" hf download \
+  "${HF_DATASET_ID}" \
+  --repo-type dataset \
+  --include "*.jpg" "*.png" "*.webp" \
+  --local-dir "${PALLETIZER_DATA_ROOT}"
+
+find "${PALLETIZER_DATA_ROOT}" -type f \
+  \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) \
+  | head
+```
+
+Then either point `PALLETIZER_IMAGE_DIR` at the folder containing the selected
+images, or create a manifest that references the downloaded files:
+
+```bash
+export PALLETIZER_IMAGE_DIR="${PALLETIZER_DATA_ROOT}/images"
+# or
+export PALLETIZER_MANIFEST="${PALLETIZER_DATA_ROOT}/manifest.json"
+```
+
+For public HTTP archives, download and unpack first:
+
+```bash
+curl -L -o /tmp/palletizer-data.zip "https://example.com/public-palletizer-images.zip"
+unzip -q /tmp/palletizer-data.zip -d /tmp/palletizer-data
+export PALLETIZER_IMAGE_DIR=/tmp/palletizer-data/images
+```
+
+The client does not fetch public URLs from the manifest at request time. It reads
+local files, encodes them as data URIs, and sends those data URIs to the
+Reasoner endpoint.
+
 ## 3. Run the headless client
 
 The block below uses only the Python standard library, so it can run as a shell
