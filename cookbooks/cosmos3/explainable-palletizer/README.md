@@ -16,6 +16,22 @@ runnable path here is a portable, public headless client.
 **Contributor credit:** adapted from prior Cosmos Cookoff material; Minsoo Song
 is credited as one of the contributing writers.
 
+## Which Document To Read
+
+Start with this `README.md`. It is the human-readable recipe and contains the
+complete overview: backend compatibility, GPU requirements, run modes, input
+formats, the headless command flow, optional review frontend, output contract,
+validation criteria, and limitations.
+
+Use the companion markdown files only when you need their deeper task-specific
+detail:
+
+| File | Purpose |
+| --- | --- |
+| [run_custom_images_with_reasoner.md](run_custom_images_with_reasoner.md) | Copy-paste headless runner, notebook adaptation notes, mounted-file examples, and public-dataset materialization examples. |
+| [serve_review_frontend.md](serve_review_frontend.md) | Optional browser review UI for saved artifacts, including agent start/stop instructions. |
+| [workflow_e2e.md](workflow_e2e.md) | Scenario walkthroughs and validation criteria for damaged cartons, heavy boxes, mixed-SKU stacking, token budget, and action quality checks. |
+
 ## Backend Compatibility
 
 The original merged recipe used an `inference-server` container from the upstream
