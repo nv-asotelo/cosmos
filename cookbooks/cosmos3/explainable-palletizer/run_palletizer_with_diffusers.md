@@ -112,16 +112,68 @@ spend several minutes loading model weights before it returns. Keep the request
 timeout high enough for that warm load; subsequent smoke requests should be much
 faster on the same process.
 
-## 4. Run the Doosan full-stack smoke with Cosmos3-Nano Reasoner
+## 4. Run the Doosan full-stack smoke
 
-The UI reasoning and action panels require a real Reasoner endpoint. Use
-Cosmos3-Nano Reasoner for the default full-stack smoke. The source repo's
-`docker-compose.test.yml` uses `facebook/opt-125m`; that is a health-only
-container smoke and should not be expected to produce reasoning. With the
-default app request shape, `opt-125m` rejects the request because
-`max_tokens=2048` exceeds its `max_model_len=512`.
+Choose the full-stack mode first:
 
-Use alternate ports if another service already occupies the defaults:
+```bash
+# off = default Cosmos3-Nano Reasoner action smoke; verbose reasoning not required
+# on  = Cosmos3-Nano Reasoner with visible reasoning required as validation evidence
+export PALLETIZER_REASONING_MODE="${PALLETIZER_REASONING_MODE:-off}"
+```
+
+Both cookbook modes use Cosmos3 by default. The source repo's
+`docker-compose.test.yml` includes `facebook/opt-125m`, but that service is a
+plumbing stub. It is not multimodal and rejects the palletizer image request, so
+do not use the unmodified test compose stack as the recipe default.
+
+This recipe still uses `docker-compose.test.yml` for convenient
+sim/app/frontend wiring, but `app-server` must be overridden to call an external
+Cosmos3-Nano Reasoner `/v1` endpoint.
+
+### Default: Cosmos3 action smoke
+
+Use this mode for the cookbook's normal full-stack smoke. It validates that
+Cosmos3-Nano sees the box images, returns one parsed action per iteration, and
+the simulator accepts the robot command. The reasoning panel may contain a short
+action rationale instead of a long visual trace.
+
+```bash
+export PALLETIZER_REASONING_MODE=off
+git clone https://github.com/doosan-robotics/explainable-palletizer.git
+cd explainable-palletizer
+cp docker/.env.example docker/.env
+test -f uv.lock || uv lock
+```
+
+Default acceptance:
+
+- `/api/health` returns `{"status":"ok"}`.
+- `/api/status` reports healthy services.
+- `app-server` logs show a successful request to the external Cosmos3-Nano
+  Reasoner endpoint.
+- At least one action is parsed and executed or deliberately escalated with
+  `CALL_A_HUMAN`.
+- The frontend loads and shows camera frames, box images, actions, and execution
+  status.
+
+### Optional: visible reasoning trace
+
+Set `PALLETIZER_REASONING_MODE=on` when the validation target is the visible
+reasoning trace itself. This uses the same Cosmos3-Nano Reasoner endpoint and
+the same robot checks, but the pass condition also requires non-empty reasoning
+text in the UI or saved `response.txt` artifacts.
+
+This mode is stricter because the reference app asks the model for free-form
+reasoning and action JSON in the same completion. A larger token budget reduces
+truncation, but prompt and max-token settings alone cannot guarantee complete
+parseable JSON for every scene. Keep the default action smoke for CI or PR
+gating until the app uses structured output or a separate action-only follow-up
+call.
+
+Reserve host port `8200` for Cosmos3-Nano Reasoner. The upstream test
+`inference-server` container can still satisfy the compose dependency, but it
+must bind a different host port so it does not collide with Cosmos3:
 
 ```bash
 git clone https://github.com/doosan-robotics/explainable-palletizer.git
@@ -133,35 +185,163 @@ python3 - <<'PY'
 from pathlib import Path
 p = Path("docker/.env")
 text = p.read_text()
-for old, new in {
-    "SIM_PORT=8100": "SIM_PORT=8310",
-    "INFERENCE_PORT=8200": "INFERENCE_PORT=8320",
-    "APP_PORT=8000": "APP_PORT=8330",
-    "FRONTEND_PORT=3000": "FRONTEND_PORT=3340",
-}.items():
-    text = text.replace(old, new)
+text = text.replace("INFERENCE_PORT=8200", "INFERENCE_PORT=8320")
 p.write_text(text)
 PY
-
 ```
+
+If another service already occupies the other defaults, also change `SIM_PORT`,
+`APP_PORT`, or `FRONTEND_PORT` in `docker/.env` before starting compose.
 
 Start a Cosmos3-Nano Reasoner OpenAI-compatible server before launching the app
 loop. The two supported Nano paths are:
 
 - vLLM: serve `nvidia/Cosmos3-Nano` with
-  `--hf-overrides '{"architectures": ["Cosmos3ReasonerForConditionalGeneration"]}'`.
+  the Cosmos3-Nano Reasoner checkpoint. Add
+  `--hf-overrides '{"architectures": ["Cosmos3ReasonerForConditionalGeneration"]}'`
+  only if the checkpoint metadata does not already declare the Reasoner
+  architecture.
 - NIM: serve `nvidia/cosmos3-nano-reasoner` with `NIM_MODEL_SIZE=nano`.
 
 Follow the shared [vLLM Reasoner](../README.md#vllm) or
 [NIM Reasoner](../README.md#nim) setup, then point the Doosan app server at the
-Reasoner `/v1` endpoint. A successful reasoning smoke is not just healthy
-containers: the frontend should show non-empty reasoning text and parsed actions.
+Reasoner `/v1` endpoint. A successful Cosmos3 full-stack smoke is not just
+healthy containers: the logs must show a successful Cosmos3 completion request
+and the app must parse an action. If `PALLETIZER_REASONING_MODE=on`, also
+require non-empty visible reasoning text.
+
+The validated agent path is to keep the Reasoner outside the Doosan compose
+stack and point `app-server` at it. This avoids accidentally treating the
+`facebook/opt-125m` health stub as a Cosmos3 pass.
+
+```bash
+# Run on the GPU host from the environment where vLLM and the Reasoner weights
+# are installed. COSMOS3_REASONER_MODEL_PATH may be a local checkpoint path or
+# a Hugging Face model path after license acceptance.
+export COSMOS3_REASONER_MODEL_PATH="${COSMOS3_REASONER_MODEL_PATH:-/path/to/Cosmos3-Nano-Reasoner}"
+export COSMOS3_REASONER_PORT="${COSMOS3_REASONER_PORT:-8200}"
+
+vllm serve "${COSMOS3_REASONER_MODEL_PATH}" \
+  --served-model-name nvidia/Cosmos3-Nano \
+  --host 0.0.0.0 \
+  --port "${COSMOS3_REASONER_PORT}" \
+  --max-model-len 8192 \
+  --media-io-kwargs '{"video": {"num_frames": -1}}' \
+  --reasoning-parser qwen3 \
+  --gpu-memory-utilization 0.55
+```
+
+Confirm the endpoint before starting the app loop:
+
+```bash
+curl -fsS "http://127.0.0.1:${COSMOS3_REASONER_PORT}/v1/models"
+```
+
+Create an app-server override that targets the host Reasoner. Keep completion
+limits high enough for visual reasoning plus JSON action output. `512` tokens
+can truncate three-box outputs inside `<answer>`; `1024` is the default smoke
+setting for Cosmos3-Nano Reasoner:
+
+```bash
+cat >/tmp/cosmos3-palletizer-reasoner.override.yml <<'YAML'
+services:
+  app-server:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SIM_SERVER_URL: http://sim-server:8100
+      INFERENCE_SERVER_URL: "http://host.docker.internal:${COSMOS3_REASONER_PORT:-8200}/v1"
+      INFERENCE_MODEL: nvidia/Cosmos3-Nano
+      MAX_COMPLETION_TOKENS: "1024"
+      REQUEST_TIMEOUT: "240"
+      STEP_LOG_DIR: /tmp/palletizer-step-logs
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+YAML
+```
+
+Start or recreate the UI-facing services with the override:
+
+```bash
+cd docker
+docker compose -f docker-compose.yml \
+  -f docker-compose.test.yml \
+  -f /tmp/cosmos3-palletizer-reasoner.override.yml \
+  up -d --force-recreate app-server frontend
+
+curl -fsS http://127.0.0.1:8000/api/health
+curl -fsS http://127.0.0.1:8000/api/status
+curl -fsS http://127.0.0.1:3000/ >/dev/null
+```
+
+Start the loop from the UI or with the API:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8000/api/control/start
+```
+
+The stack is using Cosmos3 only after app-server logs show a request to the
+Reasoner endpoint and a parsed action:
+
+```bash
+docker compose -f docker-compose.yml \
+  -f docker-compose.test.yml \
+  -f /tmp/cosmos3-palletizer-reasoner.override.yml \
+  logs --tail=160 app-server
+```
+
+Look for lines like:
+
+```text
+POST http://host.docker.internal:8200/v1/chat/completions "HTTP/1.1 200 OK"
+LLM raw response (first 500 chars): <think>
+Executing: action=PICK_AND_PLACE box_id=box_0001 pallet=1 position=(0, 0, 1)
+```
+
+The `/api/status` response can still display a service named
+`inference-server` because that is the app's generic health label. The default
+smoke passes only when the logs show the external Cosmos3-Nano Reasoner URL and
+the UI or step artifacts contain a parsed action. In
+`PALLETIZER_REASONING_MODE=on`, additionally require a non-empty reasoning trace
+in the UI or `response.txt`.
+
+The app also writes per-step handoff artifacts inside the container:
+
+```bash
+docker compose -f docker-compose.yml \
+  -f docker-compose.test.yml \
+  -f /tmp/cosmos3-palletizer-reasoner.override.yml \
+  exec app-server find /tmp/palletizer-step-logs -maxdepth 2 -type f | sort
+```
+
+Each successful Cosmos3 step should include `scenario.txt`, `response.txt`,
+`action.json`, and the box images that were sent to Cosmos3.
 
 The current public Doosan Dockerfile expects `uv.lock`; the `uv lock` guard
 generates it for fresh clones where upstream has not checked in the lockfile.
 When the launcher reports all services healthy, open the configured frontend
-port and verify that the simulated camera, reasoning panel, action panel, and
-execution status are visible.
+port and verify that the simulated camera, action panel, and execution status
+are visible. For `PALLETIZER_REASONING_MODE=on`, also verify the reasoning panel.
+
+### Plumbing-only upstream fallback
+
+Use the unmodified upstream test stack only when you need to prove that Docker,
+Isaac Sim, the FastAPI server, and the frontend can boot. This is not the
+cookbook default and is not a Cosmos3 pass:
+
+```bash
+export PALLETIZER_PLUMBING_ONLY=1
+cd docker
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d
+curl -fsS http://127.0.0.1:8000/api/health
+curl -fsS http://127.0.0.1:8000/api/status
+curl -fsS http://127.0.0.1:3000/ >/dev/null
+```
+
+In this fallback, `app-server` points at `facebook/opt-125m`. That model is not
+multimodal, so completion requests for box images fail with a 400 error such as
+`facebook/opt-125m is not a multimodal model`. Empty reasoning and action panels
+are expected and should not be reported as recipe validation.
 
 ### Full-stack troubleshooting
 
@@ -199,6 +379,26 @@ If you deliberately run `docker-compose.test.yml`, lower
 `MAX_COMPLETION_TOKENS` to fit the tiny model only when testing request plumbing.
 Do not treat that as a Cosmos3 reasoning pass; the useful palletizer demo should
 run against Cosmos3-Nano Reasoner.
+
+If the UI stays on "No reasoning yet" and the action list does not advance:
+
+- Confirm `INFERENCE_SERVER_URL` inside `app-server` points to the external
+  Cosmos3 `/v1` endpoint, not the test compose `inference-server`.
+- Confirm `curl http://127.0.0.1:8200/v1/models` returns
+  `nvidia/Cosmos3-Nano`.
+- Inspect app logs for `POST ... /v1/chat/completions`. If there is no POST,
+  the app never reached the Reasoner.
+- If the UI shows reasoning but no new action, inspect
+  `/tmp/palletizer-step-logs/step_*/response.txt`. A response that ends inside
+  `<answer>` or midway through JSON was truncated before the parser could build
+  an action; increase `MAX_COMPLETION_TOKENS` to `1024` or higher and recreate
+  `app-server`.
+- Inspect `STEP_LOG_DIR`; empty or missing box images usually means the app did
+  not receive usable simulator image IDs.
+- If `/sim/buffer/status` returns IDs like `box_0` but
+  `/sim/boxes/images_for_ids` only returns images for zero-padded IDs like
+  `box_0000`, use a source revision that normalizes those IDs or patch the
+  local Doosan checkout for the smoke run.
 
 If `sim-server` exits with `AttributeError: module 'warp.types' has no attribute
 'array'`, the image resolved a newer `warp-lang` than the current cuRobo/Isaac

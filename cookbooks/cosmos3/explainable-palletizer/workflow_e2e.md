@@ -56,6 +56,60 @@ The Cosmos3 Diffusers smoke test does not replace the robot action parser. It
 creates visual evidence for palletizing prompts, scene constraints, and
 operator-review criteria before or alongside the full-stack robot smoke path.
 
+## Cosmos3 Full-Stack Smoke Evidence
+
+The default full-stack recipe mode is a Cosmos3-Nano action smoke with verbose
+reasoning not required as a pass condition. Set `PALLETIZER_REASONING_MODE=on`
+only when the validation target includes the visible reasoning trace itself. In
+both recipe modes, do not stop at `docker compose ps` or `/api/status`. The UI
+can be healthy while the model path is wrong if the app still points at the test
+compose stub. A valid Cosmos3-Nano Reasoner smoke has all of this evidence:
+
+- `/v1/models` on the Reasoner endpoint returns `nvidia/Cosmos3-Nano`.
+- `app-server` is configured with `INFERENCE_SERVER_URL` pointing at that
+  Reasoner endpoint's `/v1` base URL.
+- `app-server` logs contain a successful
+  `POST ... /v1/chat/completions "HTTP/1.1 200 OK"`.
+- The raw response is parsed into one of the bounded actions. In
+  `PALLETIZER_REASONING_MODE=on`, it should also contain visual inspection or
+  `<think>` text for operator review.
+- The logs contain an execution line such as
+  `Executing: action=PICK_AND_PLACE box_id=box_0001 ...` or an explicit
+  `CALL_A_HUMAN` action for unsafe boxes.
+- `STEP_LOG_DIR` contains per-step `scenario.txt`, `response.txt`,
+  `action.json`, and the box image files sent to the Reasoner.
+
+Example action artifact from a passing Nano Reasoner step:
+
+```json
+{
+  "action": "PICK_AND_PLACE",
+  "box_id": "box_0001",
+  "target_pallet": 1,
+  "position": [0, 0, 1],
+  "speed_pct": 100,
+  "grip_strength": "standard",
+  "reason": "Intact sturdy box placed on a valid stable pallet cell."
+}
+```
+
+If the first model response contains a long reasoning block but no complete JSON
+object, the app may request a continuation. Count the smoke as passing only when
+the continuation produces a parsed action and the simulator accepts the action
+or the UI records a deliberate human-escalation event.
+
+If reasoning is visible but the action list does not advance, inspect the saved
+`response.txt` for that step. A response that ends inside `<answer>` or midway
+through a JSON field means the model completed the visual audit but hit the
+completion-token limit before emitting a parseable action. Raise
+`MAX_COMPLETION_TOKENS` to at least `1024` for Cosmos3-Nano Reasoner and rerun
+the app-server smoke. This is a reference-app/parser setup issue rather than a
+Cosmos3 service availability issue.
+
+Because prompt shape and token count cannot fully guarantee parseable JSON from
+a free-form reasoning response, keep the default action smoke as the PR/CI gate
+unless the goal is specifically to inspect Cosmos3 visual reasoning.
+
 ## Action Contract
 
 The reference app accepts three action types:
@@ -250,6 +304,7 @@ the reference app's parser, pallet constraints, and simulated execution checks.
 - Real deployments need independent safety controls, guarded robot execution,
   site-specific validation, and human-approved exception handling.
 - The public Doosan stack can change independently of this cookbook, so treat
-  `make docker-test` as a container-health smoke rather than a guaranteed
-  reasoning test. Its `facebook/opt-125m` test model can bring the services up
-  but should not be expected to populate the reasoning panel.
+  unmodified `make docker-test` as a container-health smoke rather than the
+  cookbook default. Its `facebook/opt-125m` test model can bring the services up
+  but is not multimodal and should not be expected to produce Cosmos3 actions or
+  reasoning.
