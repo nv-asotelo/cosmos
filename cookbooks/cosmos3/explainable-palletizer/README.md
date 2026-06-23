@@ -13,13 +13,12 @@ runnable path here is a portable, public headless client.
 | --- | --- | --- |
 | [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) Reasoner, [vLLM](https://docs.vllm.ai/) or [Cosmos3 Reasoner NIM](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/cosmos3-reasoner) | Reasoner | Inspect palletizing box images, explain handling risks, and emit bounded action recommendations |
 
-**Scenario lineage:** adapted from the Doosan Robotics explainable palletizer
-Cosmos Cookoff recipe by Kyungchan Son, Minsoo Song, Yujeong Jeong, and Yuri
-Rocha.
+**Contributor credit:** adapted from prior Cosmos Cookoff material; Minsoo Song
+is credited as one of the contributing writers.
 
 ## Backend Compatibility
 
-Minsoo's original recipe used an `inference-server` container from the upstream
+The original merged recipe used an `inference-server` container from the upstream
 demo. That server is a vLLM OpenAI-compatible API on port `8200`, but its
 default model and environment are for Cosmos Reason 2:
 
