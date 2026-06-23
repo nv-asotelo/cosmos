@@ -16,6 +16,8 @@ and React control-loop smoke test.
 
 - Run a Cosmos3-Nano or Cosmos3-Super Diffusers smoke request for a palletizing
   cell and save the generated media artifact.
+- Run your own box images through Cosmos3-Nano Reasoner without the demo
+  frontend and save the reasoning trace plus structured recommendations.
 - Validate the Doosan reference stack with real Isaac Sim, cuRobo, and a
   Cosmos3-Nano Reasoner endpoint that can populate the reasoning and action
   panels.
@@ -46,15 +48,21 @@ and React control-loop smoke test.
 | Backend | Entry point | GPU requirement |
 | --- | --- | --- |
 | Diffusers-compatible HTTP endpoint | [`run_palletizer_with_diffusers.md`](run_palletizer_with_diffusers.md) | Nano: single GPU; Super: multi-GPU |
+| Headless Cosmos3-Nano Reasoner endpoint | [`run_custom_images_with_reasoner.md`](run_custom_images_with_reasoner.md) | Single GPU serving the Reasoner |
 | Doosan reference stack | Cosmos3-Nano Reasoner endpoint plus the source repo app stack | NVIDIA GPU with Isaac Sim support |
 
-The two backends validate different things. The Diffusers endpoint validates
-Cosmos3-Nano or Cosmos3-Super scene generation. The Doosan stack validates the
-closed-loop UI, parser, pallet-state updates, and simulated robot execution.
+These backends validate different things. The Diffusers endpoint validates
+Cosmos3-Nano or Cosmos3-Super scene generation. The headless Reasoner path
+validates model inspection and structured recommendations on your own images.
+The Doosan stack validates the closed-loop UI, parser, pallet-state updates, and
+simulated robot execution.
 For the cookbook full-stack smoke, the Doosan `app-server` must point at a
 Cosmos3-Nano Reasoner OpenAI-compatible `/v1` endpoint. The
 `facebook/opt-125m` container in the upstream test compose file is only a
 plumbing stub: it is neither multimodal nor a Cosmos3 validation backend.
+Use the headless Reasoner endpoint when you want to bring your own box images
+and collect model reasoning plus JSON output without running Isaac Sim or the
+React frontend.
 
 ## Reasoning Modes
 
@@ -95,6 +103,24 @@ Then run the Python smoke-test block in
 local media artifact and verify the response can be decoded. Use
 [workflow_e2e.md](workflow_e2e.md) to compare the generated artifact against the
 operator-review criteria from the reference palletizer scenarios.
+
+To run on your own images without the demo frontend, start Cosmos3-Nano
+Reasoner and call the headless client:
+
+```bash
+cd cookbooks/cosmos3/explainable-palletizer
+export COSMOS3_REASONER_BASE_URL=http://127.0.0.1:8200/v1
+export COSMOS3_REASONER_MODEL=nvidia/Cosmos3-Nano
+export PALLETIZER_IMAGE_DIR=/path/to/my/box-images
+export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
+```
+
+Then run
+[`run_custom_images_with_reasoner.md`](run_custom_images_with_reasoner.md). It
+writes `raw_response.txt`, `reasoning_trace.txt`, `plan.json`, and
+`request_summary.json`, and the Python block can be copied directly into a
+notebook. Use a `manifest.json` when you want to provide real weights,
+dimensions, pallet state, or handling notes.
 
 Then run the full-stack reference smoke on a GPU host. The default full-stack
 smoke is Cosmos3-Nano with reasoning not required as a pass condition:
