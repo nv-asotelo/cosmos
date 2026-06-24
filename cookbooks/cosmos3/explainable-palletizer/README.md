@@ -13,8 +13,8 @@ runnable path here is a portable, public headless client.
 | --- | --- | --- |
 | [Cosmos3-Nano](https://huggingface.co/nvidia/Cosmos3-Nano) Reasoner, [vLLM](https://docs.vllm.ai/) or [Cosmos3 Reasoner NIM](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/cosmos3-reasoner) | Reasoner | Inspect palletizing box images, explain handling risks, and emit bounded action recommendations |
 
-**Contributor credit:** adapted from prior Cosmos Cookoff material; Minsoo Song
-is credited as one of the contributing writers.
+**Original authors:** Kyungchan Son, Minsoo Song, Yujeong Jeong, and Yuri Rocha
+-- Doosan Robotics.
 
 ## Which Document To Read
 
