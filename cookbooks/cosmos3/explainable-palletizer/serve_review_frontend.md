@@ -1,16 +1,17 @@
-# Serve A Review Frontend
+# Serve The Optional Review UI
 
-Use this optional step after the headless runner has written
-`raw_response.txt`, `reasoning_trace.txt`, `plan.json`, and
-`request_summary.json`. It creates a small static browser view from local files
-and serves it with Python's standard library.
+This appendix is for agents who need a browser view after
+[run_custom_images_with_reasoner.md](run_custom_images_with_reasoner.md) writes
+artifacts. The UI is generated from local files and served with Python's
+standard library.
 
-This frontend is for review only. It does not call the model, execute robot
-motion, or make safety decisions.
+The review UI does not call the model, execute robot motion, or make safety
+decisions. It only displays saved images, `plan.json`, `reasoning_trace.txt`,
+and `raw_response.txt`.
 
 ## Inputs
 
-Set the same image source used for the headless run:
+Use the same image source and output directory from the headless run:
 
 ```bash
 export PALLETIZER_OUTPUT_DIR="${PALLETIZER_OUTPUT_DIR:-/tmp/cosmos3-palletizer-headless}"
@@ -19,23 +20,24 @@ export PALLETIZER_IMAGE_DIR=/path/to/my/box-images
 export PALLETIZER_MANIFEST=/path/to/manifest.json
 ```
 
-If the images are in a mounted volume, use the path visible from the process
-running this script. For a Docker runtime, that means the container-visible path,
-not the host path.
+If the images live in a mounted folder, use the path visible from the process
+running the server.
 
-## Agent Instructions
+## Agent Steps
 
-An agent should:
+1. Confirm `PALLETIZER_OUTPUT_DIR/plan.json` exists.
+2. Set `PALLETIZER_REVIEW_HOST=127.0.0.1` for local-only review, or
+   `PALLETIZER_REVIEW_HOST=0.0.0.0` on a trusted remote host.
+3. Set `PALLETIZER_REVIEW_PORT`, defaulting to `3000`.
+4. Run the block below.
+5. Report the URL and the PID file path.
+6. Stop the server with:
 
-1. Run `run_custom_images_with_reasoner.md` first.
-2. Confirm `PALLETIZER_OUTPUT_DIR/plan.json` exists.
-3. Start this review server in the background.
-4. Report the URL and the PID file path.
-5. Stop the server with `kill $(cat "$PALLETIZER_OUTPUT_DIR/review_server.pid")`
-   when the user is done.
+```bash
+kill "$(cat "${PALLETIZER_OUTPUT_DIR}/review_server.pid")"
+```
 
-For local browser use, bind to `127.0.0.1`. On a remote GPU host, bind to
-`0.0.0.0` only on a trusted network.
+## Run
 
 ```bash
 export PALLETIZER_OUTPUT_DIR="${PALLETIZER_OUTPUT_DIR:-/tmp/cosmos3-palletizer-headless}"
@@ -65,6 +67,10 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def esc(value) -> str:
+    return html.escape("" if value is None else str(value))
+
+
 def collect_images():
     manifest_path = os.environ.get("PALLETIZER_MANIFEST")
     image_dir = os.environ.get("PALLETIZER_IMAGE_DIR")
@@ -72,13 +78,12 @@ def collect_images():
     if manifest_path:
         manifest = Path(manifest_path).expanduser().resolve()
         data = read_json(manifest, {})
-        base = manifest.parent
         images = []
         for idx, item in enumerate(data.get("boxes", [])):
             image = item.get("image")
             if not image:
                 continue
-            path = (base / image).resolve()
+            path = (manifest.parent / image).resolve()
             images.append(
                 {
                     "box_id": item.get("box_id") or path.stem or f"box_{idx:04d}",
@@ -99,14 +104,10 @@ def collect_images():
     return []
 
 
-def esc(value) -> str:
-    return html.escape("" if value is None else str(value))
-
-
 out_dir = Path(os.environ.get("PALLETIZER_OUTPUT_DIR", "/tmp/cosmos3-palletizer-headless")).expanduser().resolve()
-review_dir = out_dir / "review_frontend"
-image_out = review_dir / "images"
-image_out.mkdir(parents=True, exist_ok=True)
+review_dir = out_dir / "review_ui"
+image_dir = review_dir / "images"
+image_dir.mkdir(parents=True, exist_ok=True)
 
 plan = read_json(out_dir / "plan.json", {})
 summary = read_json(out_dir / "request_summary.json", {})
@@ -119,18 +120,18 @@ for item in images:
     src = item["path"]
     if not src.exists():
         continue
-    safe_name = f"{item['box_id']}{src.suffix.lower()}"
-    dst = image_out / safe_name
+    name = f"{item['box_id']}{src.suffix.lower()}"
+    dst = image_dir / name
     shutil.copy2(src, dst)
-    image_map[item["box_id"]] = f"images/{safe_name}"
+    image_map[item["box_id"]] = f"images/{name}"
 
-box_rows = []
+cards = []
 for box in plan.get("boxes", []):
     box_id = box.get("box_id", "")
     image_html = ""
     if box_id in image_map:
         image_html = f'<img src="{esc(image_map[box_id])}" alt="{esc(box_id)}">'
-    box_rows.append(
+    cards.append(
         f"""
         <article class="card">
           {image_html}
@@ -144,12 +145,12 @@ for box in plan.get("boxes", []):
         """
     )
 
-if not box_rows:
+if not cards:
     for item in images:
         image_html = ""
         if item["box_id"] in image_map:
             image_html = f'<img src="{esc(image_map[item["box_id"]])}" alt="{esc(item["box_id"])}">'
-        box_rows.append(
+        cards.append(
             f"""
             <article class="card">
               {image_html}
@@ -160,7 +161,9 @@ if not box_rows:
         )
 
 actions = plan.get("actions", [])
-action_items = "\n".join(f"<li><pre>{esc(json.dumps(action, indent=2))}</pre></li>" for action in actions)
+action_items = "\n".join(
+    f"<li><pre>{esc(json.dumps(action, indent=2))}</pre></li>" for action in actions
+)
 
 index = f"""<!doctype html>
 <html lang="en">
@@ -185,6 +188,7 @@ index = f"""<!doctype html>
     <h1>Cosmos3 Palletizer Review</h1>
     <div class="meta">
       <b>Model:</b> {esc(summary.get("model"))}
+      <br><b>Reasoning mode:</b> {esc(summary.get("reasoning_mode"))}
       <br><b>Elapsed:</b> {esc(summary.get("elapsed_sec"))} sec
       <br><b>Output:</b> {esc(out_dir)}
     </div>
@@ -192,9 +196,7 @@ index = f"""<!doctype html>
   <main>
     <section>
       <h2>Box Evidence</h2>
-      <div class="grid">
-        {''.join(box_rows)}
-      </div>
+      <div class="grid">{''.join(cards)}</div>
     </section>
     <section class="panel">
       <h2>Actions</h2>
@@ -217,19 +219,13 @@ index = f"""<!doctype html>
 host = os.environ.get("PALLETIZER_REVIEW_HOST", "127.0.0.1")
 port = int(os.environ.get("PALLETIZER_REVIEW_PORT", "3000"))
 handler = partial(SimpleHTTPRequestHandler, directory=str(review_dir))
+server = ThreadingHTTPServer((host, port), handler)
 print(f"Serving {review_dir} at http://{host}:{port}/", flush=True)
-ThreadingHTTPServer((host, port), handler).serve_forever()
+server.serve_forever()
 PY
 
-python3 "${PALLETIZER_OUTPUT_DIR}/serve_review.py" \
-  >"${PALLETIZER_OUTPUT_DIR}/review_server.log" 2>&1 &
-echo $! >"${PALLETIZER_OUTPUT_DIR}/review_server.pid"
-echo "PID: $(cat "${PALLETIZER_OUTPUT_DIR}/review_server.pid")"
-echo "URL: http://${PALLETIZER_REVIEW_HOST}:${PALLETIZER_REVIEW_PORT}/"
-```
-
-Stop the server:
-
-```bash
-kill "$(cat "${PALLETIZER_OUTPUT_DIR}/review_server.pid")"
+python3 "${PALLETIZER_OUTPUT_DIR}/serve_review.py" &
+echo "$!" >"${PALLETIZER_OUTPUT_DIR}/review_server.pid"
+echo "Review UI: http://${PALLETIZER_REVIEW_HOST}:${PALLETIZER_REVIEW_PORT}/"
+echo "PID file: ${PALLETIZER_OUTPUT_DIR}/review_server.pid"
 ```

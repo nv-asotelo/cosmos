@@ -1,56 +1,66 @@
-# Run Custom Palletizing Images with Cosmos3 Reasoner
+# Run Custom Images With Cosmos3 Reasoner
 
-Use this public entry point when you want to send box images directly to a
-Cosmos3-Nano Reasoner OpenAI-compatible endpoint and write an operator-visible
-reasoning trace plus a structured palletizing recommendation. It does not use
-Diffusers or any external demo stack.
+This appendix is for agents and advanced users who need to make the human
+recipe in [README.md](README.md) run headlessly. It sends local box images to a
+Cosmos3 Reasoner `/v1/chat/completions` endpoint and writes the saved artifacts
+used by the optional review UI.
 
-The original merged recipe's `inference-server` was a vLLM server configured for
-Cosmos Reason 2. It is not a drop-in Cosmos3 backend. For this recipe, start a
-standalone Cosmos3 Reasoner endpoint and use the model ID returned by
-`/v1/models`.
+The runner validates reasoning and action formatting only. It does not execute
+robot motion or certify that a placement is safe for a real cell.
 
-This path validates model reasoning and output formatting only. It does not
-execute robot motion, compute collision-free trajectories, or certify that a
-placement is robot-safe.
+## Environment
 
-## 1. Start or select a Reasoner endpoint
+Set these variables before running the Python block.
 
-Run a Cosmos3-Nano Reasoner server with vLLM or NIM, then point this client at
-the `/v1` base URL:
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `COSMOS3_REASONER_BASE_URL` | `http://127.0.0.1:8200/v1` | Base URL for the Cosmos3 Reasoner endpoint |
+| `COSMOS3_REASONER_MODEL` | `nvidia/Cosmos3-Nano` | Served model ID returned by `/v1/models` |
+| `COSMOS3_REASONER_API_KEY` | empty | Optional bearer token for secured endpoints |
+| `PALLETIZER_IMAGE_DIR` | empty | Folder of `jpg`, `jpeg`, `png`, or `webp` files |
+| `PALLETIZER_MANIFEST` | empty | JSON manifest with boxes, images, pallets, and optional metadata |
+| `PALLETIZER_OUTPUT_DIR` | `/tmp/cosmos3-palletizer-headless` | Directory where artifacts are written |
+| `PALLETIZER_REASONING_MODE` | `summary` | `summary` for compact evidence, `off` for action-first output |
+| `MAX_COMPLETION_TOKENS` | `1536` | Response budget for the JSON object |
+| `PALLETIZER_REQUEST_TIMEOUT` | `600` | Endpoint timeout in seconds |
 
-The client itself does not need a GPU if the endpoint is remote. The serving
-host should be a workstation-class NVIDIA GPU system for the default
-Cosmos3-Nano Reasoner path. Smaller 24 GB GPUs are not the documented baseline
-for this recipe.
+Confirm the endpoint first:
 
 ```bash
 export COSMOS3_REASONER_BASE_URL="${COSMOS3_REASONER_BASE_URL:-http://127.0.0.1:8200/v1}"
 export COSMOS3_REASONER_MODEL="${COSMOS3_REASONER_MODEL:-nvidia/Cosmos3-Nano}"
-
 curl -fsS "${COSMOS3_REASONER_BASE_URL}/models"
 ```
 
-The model list should include `nvidia/Cosmos3-Nano` for the default Nano path.
-Use the model ID returned by your server if it differs.
+## Input Patterns
 
-## 2. Prepare your images
+### Local Folder
 
-For quick experiments, put `jpg`, `jpeg`, `png`, or `webp` files in one
-directory. The filename stem becomes the `box_id`:
+Use a folder when each image filename can become the `box_id`.
 
 ```bash
-export PALLETIZER_IMAGE_DIR=/path/to/my/box-images
+export PALLETIZER_IMAGE_DIR=/data/palletizer/images
+export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
 ```
 
-For repeatable tests, provide a manifest with image paths and optional box
-metadata. Relative image paths are resolved from the manifest directory.
+### Manifest
+
+Use a manifest when you need repeatable metadata. Relative image paths are
+resolved from the manifest directory.
 
 ```json
 {
   "pallets": [
-    {"id": 1, "max_weight_kg": 500, "occupied_cells": 0},
-    {"id": 2, "max_weight_kg": 500, "occupied_cells": 0}
+    {
+      "id": 1,
+      "occupied_cells": 0,
+      "valid_positions": [[0, 0, 0], [1, 0, 0]]
+    },
+    {
+      "id": 2,
+      "occupied_cells": 0,
+      "valid_positions": [[0, 0, 0], [1, 0, 0]]
+    }
   ],
   "boxes": [
     {
@@ -58,149 +68,120 @@ metadata. Relative image paths are resolved from the manifest directory.
       "image": "box_0000.png",
       "weight_kg": 2.1,
       "size_cm": [50, 50, 25],
-      "notes": "wireless earbuds, fragile contents"
-    },
-    {
-      "box_id": "box_0001",
-      "image": "box_0001.png",
-      "weight_kg": 9.2,
-      "size_cm": [25, 25, 25],
-      "notes": "canned drink case"
+      "notes": "wireless earbuds, fragile contents",
+      "valid_positions": {
+        "1": [[0, 0, 0], [1, 0, 0]],
+        "2": [[0, 0, 0]]
+      }
     }
   ]
 }
 ```
-
-Set:
-
-```bash
-export PALLETIZER_MANIFEST=/path/to/manifest.json
-```
-
-If both `PALLETIZER_MANIFEST` and `PALLETIZER_IMAGE_DIR` are set, the manifest
-wins.
-
-### Local Files
-
-Use absolute paths when possible. This keeps shell, notebook, and agent runs
-consistent:
-
-```bash
-export PALLETIZER_IMAGE_DIR=/data/palletizer/images
-export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
-```
-
-For metadata-rich runs, prefer a manifest:
 
 ```bash
 export PALLETIZER_MANIFEST=/data/palletizer/manifest.json
 export PALLETIZER_OUTPUT_DIR=/tmp/cosmos3-palletizer-headless
 ```
 
+If both `PALLETIZER_MANIFEST` and `PALLETIZER_IMAGE_DIR` are set, the manifest
+wins.
+
 ### Mounted Files
 
-If an agent runs the client from a container, mount the dataset and output
-directory explicitly, then use the container-visible paths:
+When an agent runs inside a container or remote workspace, mount input data and
+outputs explicitly, then use the path visible from that process:
 
 ```bash
-docker run --rm -it \
-  --add-host=host.docker.internal:host-gateway \
-  -v "$PWD":/workspace:ro \
-  -v /data/palletizer:/data:ro \
-  -v /tmp/cosmos3-palletizer-headless:/outputs \
-  -w /workspace/cookbooks/cosmos3/explainable-palletizer \
-  python:3.12-slim bash
-
-export COSMOS3_REASONER_BASE_URL=http://host.docker.internal:8200/v1
-export COSMOS3_REASONER_MODEL=nvidia/Cosmos3-Nano
-export PALLETIZER_MANIFEST=/data/manifest.json
-export PALLETIZER_OUTPUT_DIR=/outputs
+export PALLETIZER_MANIFEST=/mnt/palletizer/manifest.json
+export PALLETIZER_OUTPUT_DIR=/mnt/palletizer/outputs
+export COSMOS3_REASONER_BASE_URL=http://HOST_OR_IP:8200/v1
 ```
 
-On Linux Docker, `host.docker.internal` may require the host-gateway mapping
-shown above. If that is not configured, use the host IP address that reaches the
-Reasoner endpoint from inside the container.
+For read-only inputs, keep the image mount read-only and write artifacts to a
+separate output mount.
 
 ### Public Datasets
 
-Materialize public datasets locally before running inference. Review the dataset
-license and filter to a small image batch before sending it to the model:
+Materialize public data locally first, review the dataset license, then point
+the recipe at the local subset.
 
 ```bash
 export PALLETIZER_DATA_ROOT=/tmp/palletizer-public-data
-mkdir -p "${PALLETIZER_DATA_ROOT}"
+mkdir -p "${PALLETIZER_DATA_ROOT}/images"
 
-# Hugging Face dataset example. Replace the dataset ID and include pattern.
-export HF_DATASET_ID=org-or-user/dataset-id
-uv run --with "huggingface-hub[cli]" hf download \
-  "${HF_DATASET_ID}" \
-  --repo-type dataset \
-  --include "*.jpg" "*.png" "*.webp" \
-  --local-dir "${PALLETIZER_DATA_ROOT}"
+# Example for a public archive. Substitute the dataset source you are
+# allowed to use.
+curl -L -o "${PALLETIZER_DATA_ROOT}/dataset.zip" "https://example.com/public-palletizer-images.zip"
+python3 - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+
+root = Path("/tmp/palletizer-public-data")
+with ZipFile(root / "dataset.zip") as archive:
+    archive.extractall(root)
+PY
 
 find "${PALLETIZER_DATA_ROOT}" -type f \
   \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.webp" \) \
   | head
 ```
 
-Then either point `PALLETIZER_IMAGE_DIR` at the folder containing the selected
-images, or create a manifest that references the downloaded files:
+Create a manifest when public filenames do not contain useful `box_id` values
+or when you need weights, dimensions, labels, pallet state, or valid positions.
 
-```bash
-export PALLETIZER_IMAGE_DIR="${PALLETIZER_DATA_ROOT}/images"
-# or
-export PALLETIZER_MANIFEST="${PALLETIZER_DATA_ROOT}/manifest.json"
-```
+## Prompt Shape
 
-For public HTTP archives, download and unpack first:
+The runner uses a bounded prompt so the response stays parseable:
 
-```bash
-curl -L -o /tmp/palletizer-data.zip "https://example.com/public-palletizer-images.zip"
-unzip -q /tmp/palletizer-data.zip -d /tmp/palletizer-data
-export PALLETIZER_IMAGE_DIR=/tmp/palletizer-data/images
-```
+- Return one JSON object and no Markdown.
+- Keep `reasoning_trace` empty in action-first mode.
+- Keep `reasoning_trace` under 180 words in compact reasoning mode.
+- Keep each action `reason` under 30 words.
+- Use only visible box IDs and supplied valid positions.
+- Choose from `PICK_AND_PLACE`, `CALL_A_HUMAN`, and `WAIT`.
 
-The client does not fetch public URLs from the manifest at request time. It reads
-local files, encodes them as data URIs, and sends those data URIs to the
-Reasoner endpoint.
+If JSON truncates or actions lag behind input images, reduce the batch size, set
+`PALLETIZER_REASONING_MODE=off`, or increase `MAX_COMPLETION_TOKENS`.
 
-## 3. Run the headless client
-
-The block below uses only the Python standard library, so it can run as a shell
-smoke test or be copied into a notebook cell. It writes all outputs to
-`PALLETIZER_OUTPUT_DIR`.
+## Run
 
 ```bash
 export PALLETIZER_OUTPUT_DIR="${PALLETIZER_OUTPUT_DIR:-/tmp/cosmos3-palletizer-headless}"
-export MAX_COMPLETION_TOKENS="${MAX_COMPLETION_TOKENS:-2048}"
+export PALLETIZER_REASONING_MODE="${PALLETIZER_REASONING_MODE:-summary}"
+export MAX_COMPLETION_TOKENS="${MAX_COMPLETION_TOKENS:-1536}"
+export PALLETIZER_REQUEST_TIMEOUT="${PALLETIZER_REQUEST_TIMEOUT:-600}"
 
 python3 - <<'PY'
 import base64
 import json
 import mimetypes
 import os
-import re
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+ACTION_TYPES = {"PICK_AND_PLACE", "CALL_A_HUMAN", "WAIT"}
 
 
 def request_json(url: str, payload: dict | None = None, timeout: int = 600) -> dict:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("COSMOS3_REASONER_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="GET" if payload is None else "POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
+        body = exc.read().decode("utf-8", errors="ignore")
         raise SystemExit(f"HTTP {exc.code} from {url}: {body[:2000]}") from exc
 
 
@@ -220,18 +201,25 @@ def load_inputs() -> tuple[list[dict], list[dict]]:
         base = manifest.parent
         boxes = []
         for idx, item in enumerate(data.get("boxes", [])):
-            image_path = (base / item["image"]).resolve()
+            image = item.get("image")
+            if not image:
+                raise SystemExit(f"Manifest box {idx} is missing image")
+            image_path = (base / image).resolve()
+            if not image_path.exists():
+                raise SystemExit(f"Missing image: {image_path}")
             box = dict(item)
             box.setdefault("box_id", image_path.stem or f"box_{idx:04d}")
             box["image_path"] = str(image_path)
             boxes.append(box)
+        if not boxes:
+            raise SystemExit(f"No boxes found in manifest: {manifest}")
         return boxes, data.get("pallets", [])
 
     if not image_dir:
         raise SystemExit("Set PALLETIZER_MANIFEST or PALLETIZER_IMAGE_DIR")
 
     root = Path(image_dir).expanduser().resolve()
-    images = sorted(p for p in root.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+    images = sorted(path for path in root.iterdir() if path.suffix.lower() in IMAGE_EXTS)
     if not images:
         raise SystemExit(f"No images found in {root}")
     boxes = [
@@ -246,6 +234,89 @@ def load_inputs() -> tuple[list[dict], list[dict]]:
         for path in images
     ]
     return boxes, []
+
+
+def public_box(box: dict) -> dict:
+    clean = {key: value for key, value in box.items() if key != "image_path"}
+    clean.setdefault("valid_positions", {"1": [[0, 0, 0]], "2": [[0, 0, 0]]})
+    return clean
+
+
+def build_prompt(boxes: list[dict], pallets: list[dict], reasoning_mode: str) -> str:
+    public_boxes = [public_box(box) for box in boxes]
+    if reasoning_mode == "off":
+        trace_rule = (
+            "Set reasoning_trace to an empty string. Keep evidence inside each "
+            "box object and keep each action reason under 30 words."
+        )
+    else:
+        trace_rule = (
+            "Fill reasoning_trace with at most 180 words of visible evidence "
+            "and decision rationale. Do not include hidden chain-of-thought."
+        )
+
+    return f"""
+You are a Cosmos3 Reasoner assistant for a mixed-SKU palletizing review.
+Inspect the attached box images and the metadata below.
+
+Return exactly one JSON object and no Markdown.
+
+Required JSON shape:
+{{
+  "reasoning_trace": "string",
+  "boxes": [
+    {{
+      "box_id": "string",
+      "visible_evidence": "string",
+      "contents_guess": "string",
+      "pickable": true,
+      "risks": ["fragile"],
+      "handling": "gentle|standard|firm"
+    }}
+  ],
+  "actions": [
+    {{
+      "action": "PICK_AND_PLACE|CALL_A_HUMAN|WAIT",
+      "box_id": "string for PICK_AND_PLACE",
+      "box_ids": ["strings for CALL_A_HUMAN"],
+      "target_pallet": 1,
+      "position": [0, 0, 0],
+      "speed_pct": 40,
+      "grip_strength": "gentle|standard|firm",
+      "reason": "short reason"
+    }}
+  ]
+}}
+
+Policy:
+- Escalate open, torn, crushed, contaminated, or unsealed boxes with CALL_A_HUMAN.
+- Place heavy or rigid goods on the lowest valid stable layer.
+- Place fragile, glass, electronic, or crushable goods above heavier goods when possible.
+- Use gentle grip and slow speed for fragile goods.
+- Use firm grip for dense, canned, or rigid goods.
+- Use only visible box IDs.
+- Use only valid positions supplied in box metadata when present.
+- If no valid placement exists, return WAIT or CALL_A_HUMAN.
+- {trace_rule}
+
+Pallet metadata:
+{json.dumps(pallets, indent=2)}
+
+Box metadata:
+{json.dumps(public_boxes, indent=2)}
+""".strip()
+
+
+def message_text(message_content) -> str:
+    if isinstance(message_content, str):
+        return message_content
+    if isinstance(message_content, list):
+        parts = []
+        for item in message_content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+        return "\n".join(parts)
+    return str(message_content)
 
 
 def first_json_object(text: str) -> dict:
@@ -278,112 +349,94 @@ def first_json_object(text: str) -> dict:
     raise ValueError("No complete JSON object found in model response")
 
 
-def parse_model_response(text: str) -> tuple[dict, str]:
-    think_match = re.search(r"<think>(.*?)</think>", text, flags=re.DOTALL | re.IGNORECASE)
-    answer_match = re.search(r"<answer>(.*?)</answer>", text, flags=re.DOTALL | re.IGNORECASE)
-    answer_text = answer_match.group(1) if answer_match else text
-    parsed = first_json_object(answer_text)
-    trace = parsed.get("reasoning_trace") or (think_match.group(1).strip() if think_match else "")
-    return parsed, trace
+def validate_plan(plan: dict, visible_box_ids: set[str]) -> None:
+    if not isinstance(plan.get("boxes"), list):
+        raise ValueError("plan.boxes must be a list")
+    actions = plan.get("actions")
+    if not isinstance(actions, list) or not actions:
+        raise ValueError("plan.actions must be a non-empty list")
+    for action in actions:
+        action_type = action.get("action")
+        if action_type not in ACTION_TYPES:
+            raise ValueError(f"Unsupported action type: {action_type}")
+        if action_type == "PICK_AND_PLACE":
+            missing = [
+                key
+                for key in ("box_id", "target_pallet", "position", "speed_pct", "grip_strength", "reason")
+                if key not in action
+            ]
+            if missing:
+                raise ValueError(f"PICK_AND_PLACE missing fields: {missing}")
+            if action["box_id"] not in visible_box_ids:
+                raise ValueError(f"Action references non-visible box_id: {action['box_id']}")
+        elif action_type == "CALL_A_HUMAN":
+            box_ids = action.get("box_ids")
+            if not isinstance(box_ids, list) or not box_ids:
+                raise ValueError("CALL_A_HUMAN requires non-empty box_ids")
+            unknown = [box_id for box_id in box_ids if box_id not in visible_box_ids]
+            if unknown:
+                raise ValueError(f"CALL_A_HUMAN references non-visible boxes: {unknown}")
+        elif action_type == "WAIT" and not action.get("reason"):
+            raise ValueError("WAIT requires reason")
 
 
 base_url = os.environ.get("COSMOS3_REASONER_BASE_URL", "http://127.0.0.1:8200/v1").rstrip("/")
 model = os.environ.get("COSMOS3_REASONER_MODEL", "nvidia/Cosmos3-Nano")
-out_dir = Path(os.environ.get("PALLETIZER_OUTPUT_DIR", "/tmp/cosmos3-palletizer-headless"))
-max_tokens = int(os.environ.get("MAX_COMPLETION_TOKENS", "2048"))
-temperature = float(os.environ.get("PALLETIZER_TEMPERATURE", "0.2"))
-out_dir.mkdir(parents=True, exist_ok=True)
+out_dir = Path(os.environ.get("PALLETIZER_OUTPUT_DIR", "/tmp/cosmos3-palletizer-headless")).expanduser().resolve()
+reasoning_mode = os.environ.get("PALLETIZER_REASONING_MODE", "summary").strip().lower()
+max_tokens = int(os.environ.get("MAX_COMPLETION_TOKENS", "1536"))
+timeout = int(os.environ.get("PALLETIZER_REQUEST_TIMEOUT", "600"))
 
-models = request_json(f"{base_url}/models", timeout=60)
-model_ids = [item.get("id") for item in models.get("data", [])]
-if model not in model_ids:
-    print(json.dumps({"warning": "requested model not listed", "requested": model, "available": model_ids}, indent=2))
+if reasoning_mode not in {"summary", "off"}:
+    raise SystemExit("PALLETIZER_REASONING_MODE must be 'summary' or 'off'")
 
 boxes, pallets = load_inputs()
-if len(boxes) > int(os.environ.get("PALLETIZER_MAX_IMAGES", "6")):
-    raise SystemExit("Too many images for one request. Set PALLETIZER_MAX_IMAGES or batch the directory.")
-
-metadata = []
-content = []
+prompt = build_prompt(boxes, pallets, reasoning_mode)
+content = [{"type": "text", "text": prompt}]
 for box in boxes:
     path = Path(box["image_path"])
-    if not path.exists():
-        raise SystemExit(f"Missing image for {box['box_id']}: {path}")
-    metadata.append({k: v for k, v in box.items() if k not in {"image_path"}})
     content.append({"type": "image_url", "image_url": {"url": image_data_url(path)}})
-
-system_prompt = (
-    "You are a careful warehouse palletizing reasoning assistant. "
-    "Inspect only the provided images and metadata. Return operator-visible "
-    "evidence, risk notes, and a structured recommendation. Do not claim robot "
-    "safety certification; this is an advisory planning aid."
-)
-
-schema = {
-    "reasoning_trace": "Concise operator-visible evidence and decision rationale.",
-    "boxes": [
-        {
-            "box_id": "string",
-            "visible_evidence": "text seen in image and visible package condition",
-            "contents_guess": "what the label/appearance suggests, or unknown",
-            "pickable": True,
-            "risks": ["fragile", "heavy", "damaged", "unknown"],
-            "handling": "gentle|standard|firm|human_review",
-        }
-    ],
-    "actions": [
-        {
-            "action": "PICK_AND_PLACE|CALL_A_HUMAN|WAIT",
-            "box_id": "string or null",
-            "target_pallet": 1,
-            "position": [0, 0, 0],
-            "speed_pct": 80,
-            "grip_strength": "gentle|standard|firm",
-            "reason": "brief operator-visible reason",
-        }
-    ],
-}
-
-user_text = (
-    "Analyze these palletizing box images as a headless audit. "
-    "Use the metadata when present, but prioritize visible evidence from the images. "
-    "Recommend safe handling and a palletizing action plan. "
-    "For unknown dimensions or weights, explain the uncertainty and choose WAIT or CALL_A_HUMAN if needed.\n\n"
-    f"Box metadata:\n{json.dumps(metadata, indent=2)}\n\n"
-    f"Pallet state:\n{json.dumps(pallets or [{'id': 1, 'max_weight_kg': 500, 'occupied_cells': 0}], indent=2)}\n\n"
-    "Return exactly one JSON object. You may wrap it in <answer>...</answer>. "
-    "Use this schema:\n"
-    f"{json.dumps(schema, indent=2)}"
-)
-
-messages = [
-    {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-    {"role": "user", "content": [{"type": "text", "text": user_text}, *content]},
-]
 
 payload = {
     "model": model,
-    "messages": messages,
-    "max_completion_tokens": max_tokens,
-    "temperature": temperature,
-    "top_p": float(os.environ.get("PALLETIZER_TOP_P", "0.9")),
+    "messages": [
+        {
+            "role": "system",
+            "content": "You produce concise, parseable palletizing review JSON for Cosmos 3 recipes.",
+        },
+        {"role": "user", "content": content},
+    ],
+    "temperature": 0,
+    "max_tokens": max_tokens,
 }
 
+out_dir.mkdir(parents=True, exist_ok=True)
 start = time.time()
-result = request_json(f"{base_url}/chat/completions", payload, timeout=int(os.environ.get("PALLETIZER_TIMEOUT", "600")))
-raw = result["choices"][0]["message"].get("content", "")
-parsed, trace = parse_model_response(raw)
+response = request_json(f"{base_url}/chat/completions", payload, timeout=timeout)
+elapsed = round(time.time() - start, 3)
+message = response["choices"][0]["message"]
+raw_text = message_text(message.get("content", ""))
+plan = first_json_object(raw_text)
+plan.setdefault("reasoning_trace", "")
+validate_plan(plan, {box["box_id"] for box in boxes})
 
-(out_dir / "raw_response.txt").write_text(raw, encoding="utf-8")
-(out_dir / "reasoning_trace.txt").write_text(trace, encoding="utf-8")
-(out_dir / "plan.json").write_text(json.dumps(parsed, indent=2), encoding="utf-8")
+(out_dir / "raw_response.txt").write_text(raw_text, encoding="utf-8")
+(out_dir / "reasoning_trace.txt").write_text(str(plan.get("reasoning_trace", "")), encoding="utf-8")
+(out_dir / "plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+(out_dir / "request_payload.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+(out_dir / "inputs.json").write_text(
+    json.dumps({"boxes": [public_box(box) for box in boxes], "pallets": pallets}, indent=2),
+    encoding="utf-8",
+)
 (out_dir / "request_summary.json").write_text(
     json.dumps(
         {
+            "base_url": base_url,
             "model": model,
-            "model_ids": model_ids,
+            "reasoning_mode": reasoning_mode,
+            "max_completion_tokens": max_tokens,
+            "elapsed_sec": elapsed,
             "box_ids": [box["box_id"] for box in boxes],
-            "elapsed_sec": round(time.time() - start, 2),
             "output_dir": str(out_dir),
         },
         indent=2,
@@ -391,62 +444,45 @@ parsed, trace = parse_model_response(raw)
     encoding="utf-8",
 )
 
-print(json.dumps({
-    "model": model,
-    "boxes": [box["box_id"] for box in boxes],
-    "actions": parsed.get("actions", []),
-    "output_dir": str(out_dir),
-    "elapsed_sec": round(time.time() - start, 2),
-}, indent=2))
+print(json.dumps({"output_dir": str(out_dir), "elapsed_sec": elapsed, "actions": plan["actions"]}, indent=2))
 PY
 ```
 
-## 4. Use it from a notebook
+## Notebook Usage
 
-In a notebook, split the Python block into three cells:
-
-1. Imports and helper functions.
-2. Environment/config values plus `load_inputs()`.
-3. Request, parse, and save outputs.
-
-The key variables to change interactively are:
+For a notebook, set the same environment variables in the first cell:
 
 ```python
-base_url = "http://127.0.0.1:8200/v1"
-model = "nvidia/Cosmos3-Nano"
-manifest_path = "/path/to/manifest.json"
-out_dir = "/tmp/cosmos3-palletizer-headless"
+import os
+
+os.environ["COSMOS3_REASONER_BASE_URL"] = "http://127.0.0.1:8200/v1"
+os.environ["COSMOS3_REASONER_MODEL"] = "nvidia/Cosmos3-Nano"
+os.environ["PALLETIZER_MANIFEST"] = "/data/palletizer/manifest.json"
+os.environ["PALLETIZER_OUTPUT_DIR"] = "/tmp/cosmos3-palletizer-headless"
+os.environ["PALLETIZER_REASONING_MODE"] = "summary"
+os.environ["MAX_COMPLETION_TOKENS"] = "1536"
 ```
 
-Display the result with:
+Then paste the Python body from the `python3 - <<'PY'` block into a cell. After
+it runs, load `plan.json` and render the selected images:
 
 ```python
 from pathlib import Path
 import json
 
-out_dir = Path("/tmp/cosmos3-palletizer-headless")
-print((out_dir / "reasoning_trace.txt").read_text())
-json.loads((out_dir / "plan.json").read_text())
+out_dir = Path(os.environ["PALLETIZER_OUTPUT_DIR"])
+plan = json.loads((out_dir / "plan.json").read_text())
+plan["actions"]
 ```
 
-## Output files
+## Agent Handoff Notes
 
-| File | Contents |
-| --- | --- |
-| `raw_response.txt` | Exact model response for debugging parser or truncation issues |
-| `reasoning_trace.txt` | Operator-visible reasoning/rationale extracted from the JSON response or model text |
-| `plan.json` | Structured per-box evidence and recommended actions |
-| `request_summary.json` | Model ID, input box IDs, elapsed time, and output directory |
+When handing this recipe to another agent, include:
 
-## Notes for real data
-
-- Keep batches small. Three to six images per request is a practical starting
-  point for Nano Reasoner.
-- Provide dimensions and weights in the manifest when you want placement
-  recommendations; otherwise the model should mark the uncertainty.
-- Do not use this headless path as a robot command source without a separate
-  motion planner, collision checker, weight limits, site rules, and human
-  approval.
-- For production-grade action extraction, use structured output or a follow-up
-  action-only call instead of relying on free-form JSON inside a reasoning
-  response.
+- endpoint base URL and served model ID,
+- whether the endpoint is local or remote,
+- input source path or manifest path,
+- output directory,
+- reasoning mode,
+- any dataset license constraints,
+- whether the optional review UI should be started after inference.
